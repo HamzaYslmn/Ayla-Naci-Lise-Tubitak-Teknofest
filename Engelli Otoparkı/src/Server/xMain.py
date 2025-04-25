@@ -1,26 +1,11 @@
-import cv2
 import asyncio
 from usermanager import AddUser
 from modules import sqlite
+from modules import camera
 import datetime
 
 def get_input(prompt, default):
     return input(f"{prompt} (default: {default}): ") or default
-
-def show_qr_frame(cap, detector):
-    ret, frame = cap.read()
-    if not ret:
-        return None
-    data, points, _ = detector.detectAndDecode(frame)
-    if points is not None:
-        pts = points[0].astype(int)
-        for j in range(len(pts)):
-            cv2.line(frame, tuple(pts[j]), tuple(pts[(j+1)%len(pts)]), (0,255,0), 3)
-    cv2.imshow("QR Code Scanner", frame)
-    key = cv2.waitKey(1000 if data else 1)
-    if key & 0xFF == ord('q'):
-        return "quit"
-    return data or None
 
 async def log_event(user_uuid, status):
     log = {
@@ -50,7 +35,7 @@ async def add_user_flow():
 async def check_user_flow(user_uuid):
     try:
         user_data = await sqlite.read_db("users", uuid=user_uuid)
-    except Exception as e:
+    except Exception:
         return False
     if not user_data:
         return False
@@ -63,12 +48,12 @@ async def verified_flow():
     print("Door closed!")
 
 async def read_user_flow():
-    cap, detector = cv2.VideoCapture(0), cv2.QRCodeDetector()
+    cam, detector = camera.get_camera()
     try:
         while True:
             uuid = None
             while not uuid:
-                uuid = show_qr_frame(cap, detector)
+                uuid = camera.show_qr_frame(cam, detector)
                 if uuid == "quit":
                     return
                 if not uuid:
@@ -82,10 +67,8 @@ async def read_user_flow():
             else:
                 print("User not found ❌")
                 await asyncio.sleep(5)
-
     finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        camera.release_camera(cam)
 
 async def main():
     option = input("Select an option:\n1. Add User\n2. Read User\n\n")
