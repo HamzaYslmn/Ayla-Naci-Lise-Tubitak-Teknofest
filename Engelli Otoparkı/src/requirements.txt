@@ -2,3 +2,4 @@ qrcode[pil]
 fastapi[standard]
 uvicorn
 aiosqlite
+picamera2
