@@ -6,20 +6,24 @@ import torch
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 MODEL_NAME   = "yolov5l"
-CAMERA_SRC   = 0            # For RTSP stream, "rtsp://username:password@ip_address:port/stream"
-FRAME_WIDTH  = 640
-FRAME_HEIGHT = 480
+CAMERA_SRC   = 0
+#CAMERA_SRC  = "rtsp://username:password@ip_address:port/stream"
+
+# 1280x720 is a common resolution for HD video, providing a good balance between quality and performance.
+FRAME_WIDTH  = 1280
+FRAME_HEIGHT = 720
 
 # ─── Model Loading ───────────────────────────────────────────────────────────
 def load_model(name: str = MODEL_NAME):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    torch.backends.cudnn.benchmark = True  # Optimize cuDNN for fixed input sizes
     model = torch.hub.load("ultralytics/yolov5", name, pretrained=True)
     return model.to(device).eval(), device
 
 # ─── Main Loop ────────────────────────────────────────────────────────────────
 def main():
     model, device = load_model()
-    cap = cv2.VideoCapture(CAMERA_SRC, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(CAMERA_SRC, cv2.CAP_ANY)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
 
@@ -27,10 +31,11 @@ def main():
         ret, frame = cap.read()
         if not ret:
             continue
+        # Convert frame to RGB only once
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Use torch.from_numpy for direct tensor conversion (optional, for custom models)
         with torch.no_grad():
             preds = model(rgb)
-            # Print detected classes in the terminal
             for *box, conf, cls in preds.xyxy[0]:
                 class_name = model.names[int(cls)]
                 print(f"Detected: {class_name} (confidence: {conf:.2f})")
