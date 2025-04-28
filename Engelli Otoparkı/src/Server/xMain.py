@@ -2,6 +2,7 @@ import asyncio
 from usermanager import AddUser
 from modules import sqlite
 from modules import camera
+from modules import xLcd
 import datetime
 
 def get_input(prompt, default):
@@ -62,7 +63,12 @@ async def read_user_flow():
             if user_data:
                 status = "exit" if await get_last_status(uuid) == "entry" else "entry"
                 await log_event(uuid, status)
-                print(f"!    {status.capitalize()} - {user_data['name']} at {datetime.datetime.now().isoformat(' ')}")
+                if status == "entry":
+                    xLcd.Print_to_lcd(f"Welcome {user_data['name']}")
+                    print(f"Welcome {user_data['name']}! ✔️")
+                else:
+                    xLcd.Print_to_lcd(f"Goodbye {user_data['name']}")
+                    print(f"Goodbye {user_data['name']}! ✔️")
                 await asyncio.sleep(5)
             else:
                 print("User not found ❌")
