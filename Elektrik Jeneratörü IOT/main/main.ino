@@ -1,6 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <ESP8266mDNS.h> // <-- Add this line
 
 // WiFi credentials
 const char* ssid = "REPLACE_WITH_YOUR_SSID";
@@ -65,6 +66,14 @@ void setup() {
   }
   Serial.println(WiFi.localIP());
 
+  // --- mDNS setup ---
+  if (MDNS.begin("wifirelay")) { // Access via http://wifirelay.local
+    Serial.println("mDNS responder started");
+  } else {
+    Serial.println("Error setting up MDNS responder!");
+  }
+  // ------------------
+
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     request->send_P(200, "text/html", index_html, processor);
   });
@@ -89,5 +98,6 @@ void setup() {
 }
 
 void loop() {
+  MDNS.update(); // <-- Add this line
   // Nothing needed here
 }
