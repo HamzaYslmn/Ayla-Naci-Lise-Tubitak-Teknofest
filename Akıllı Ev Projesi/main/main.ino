@@ -2,241 +2,199 @@
 #include <WiFiClientSecure.h>
 #include <UniversalTelegramBot.h>
 #include <ArduinoJson.h>
-#include <DHT.h>
-#include <ESP32Servo.h>
+#include <DHT11.h>
 
-// Wi‑Fi credentials
-const char* ssid     = "REPLACE_WITH_YOUR_SSID";
-const char* password = "REPLACE_WITH_YOUR_PASSWORD";
+// WiFi bilgileri
+const char* ssid = "a";
+const char* password = "12345667";
 
-// Telegram BOT
-#define BOTtoken "XXXXXXXXXX:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-#define CHAT_ID  "XXXXXXXXXX"
+// Telegram Bot bilgileri
+#define BOTtoken "***"
+#define CHAT_ID "***"
 
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOTtoken, client);
 
-const int ledPin       = 2;
-bool      ledState     = LOW;
-unsigned long lastTime = 0;
-const int  pollDelay   = 1000;
+// Bot sorgu aralığı
+int botRequestDelay = 1000;
+unsigned long lastTimeBotRan = 0;
 
-// PIR sensor and alarm
-const int pirPin        = 4;
-bool      alarmOn      = false;
-bool      lastPirState = LOW;
+const int ledPin = 12;
+bool ledState = LOW;
 
-// MQ-9 Gas sensor
-const int mq9Pin = 34;
-const int mq9Threshold = 1000;
-bool gasAlarmOn = false;
+// DHT11 sensör pini
+DHT11 dht11(4);
 
-// Relay
-const int relayPin = 5;
-bool relayState = LOW;
+#define PIR_PIN 13           // PIR sensörünün bağlı olduğu GPIO pini
+#define BUZZER_PIN 25        // Buzzer'ın bağlı olduğu GPIO pini (örn: 25)
+#define GAS_SENSOR_PIN 34    // Gaz sensörünün bağlı olduğu analog pin
 
-// DHT11 sensor
-#define DHTPIN  15
-#define DHTTYPE DHT11
-DHT dht(DHTPIN, DHTTYPE);
-float lastTemp = 0;
-float lastHum  = 0;
+bool lastMotionState = LOW;     // Son hareket durumu
+bool alarmMode = false;         // Alarm modu başlangıçta kapalı
+bool gasAlertSent = false;      // Gaz bildirimi gönderildi mi?
 
-// LDR sensor
-const int ldrPin = 35;
-int lastLdrValue = -1;
-const int ldrThreshold = 2000;
-bool ldrAlarmOn = false;
+// Yeni mesajları işleme fonksiyonu
+void handleNewMessages(int numNewMessages) {
+  Serial.println("handleNewMessages");
+  Serial.println(String(numNewMessages));
 
-// Servo motor
-const int servoPin = 13;
-Servo myServo;
-int servoAngle = 0;
-bool servoAttached = false;
+  for (int i = 0; i < numNewMessages; i++) {
+    String chat_id = String(bot.messages[i].chat_id);
+    if (chat_id != CHAT_ID) {
+      bot.sendMessage(chat_id, "Unauthorized user", "");
+      continue;
+    }
+
+    String text = bot.messages[i].text;
+    Serial.println(text);
+
+    int atIndex = text.indexOf('@');
+    if (atIndex != -1) {
+      text = text.substring(0, atIndex);
+    }
+
+    String from_name = bot.messages[i].from_name;
+
+    if (text == "/start") {
+      String welcome = "Welcome, " + from_name + ".\n";
+      welcome += "Use the following commands to control your outputs.\n\n";
+      welcome += "/led_toggle to toggle LED\n";
+      welcome += "/state to get current LED state\n";
+      welcome += "/temperature to get DHT11 readings\n";
+      welcome += "/alarm_on to activate alarm mode\n";
+      welcome += "/alarm_off to deactivate alarm mode\n";
+      bot.sendMessage(chat_id, welcome, "");
+    }
+
+    if (text == "/led_toggle") {
+      ledState = !ledState;
+      digitalWrite(ledPin, ledState);
+      String msg = ledState ? "LED ON" : "LED OFF";
+      bot.sendMessage(chat_id, "LED state toggled: " + msg, "");
+    }
+
+    if (text == "/state") {
+      String alarmMsg = alarmMode ? "Alarm mode: ON\n" : "Alarm mode: OFF\n";
+      if (digitalRead(ledPin))
+        bot.sendMessage(chat_id, alarmMsg + "LED is ON", "");
+      else
+        bot.sendMessage(chat_id, alarmMsg + "LED is OFF", "");
+    }
+
+    if (text == "/temperature") {
+      int temperature = 0;
+      int humidity = 0;
+      int result = dht11.readTemperatureHumidity(temperature, humidity);
+      if (result == 0) {
+        String msg = "Temperature: " + String(temperature) + " °C\n";
+        msg += "Humidity: " + String(humidity) + " %";
+        bot.sendMessage(chat_id, msg, "");
+      } else {
+        bot.sendMessage(chat_id, DHT11::getErrorString(result), "");
+      }
+    }
+
+    if (text == "/alarm_on") {
+      alarmMode = true;
+      digitalWrite(ledPin, ledState); // LED'i önceki duruma getir
+      bot.sendMessage(chat_id, "Alarm modu AKTIF!", "");
+    }
+
+    if (text == "/alarm_off") {
+      alarmMode = false;
+      digitalWrite(ledPin, ledState); // LED'i önceki duruma getir
+      bot.sendMessage(chat_id, "Alarm modu PASIF!", "");
+    }
+  }
+}
 
 void setup() {
-    Serial.begin(115200);
-    pinMode(ledPin, OUTPUT);
-    digitalWrite(ledPin, ledState);
+  Serial.begin(115200);
 
-    pinMode(pirPin, INPUT);
-    pinMode(mq9Pin, INPUT);
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, ledState);
 
-    pinMode(relayPin, OUTPUT);
-    digitalWrite(relayPin, relayState);
+  pinMode(PIR_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 
-    pinMode(ldrPin, INPUT);
+  pinMode(GAS_SENSOR_PIN, INPUT);
 
-    dht.begin();
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
 
-    myServo.attach(servoPin);
-    servoAttached = true;
-    myServo.write(servoAngle);
+  client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
 
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-    client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Connecting to WiFi..");
+  }
+  Serial.println(WiFi.localIP());
 
-    Serial.print("Connecting to WiFi");
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-    Serial.println();
-    Serial.print("Connected, IP: ");
-    Serial.println(WiFi.localIP());
-}
-
-void sendMenu(const String &chat_id, const String &from) {
-    float t = dht.readTemperature();
-    float h = dht.readHumidity();
-    if (!isnan(t)) lastTemp = t;
-    if (!isnan(h)) lastHum = h;
-
-    int ldrValue = analogRead(ldrPin);
-    lastLdrValue = ldrValue;
-
-    String menu = "Welcome, " + from + ".\n";
-    menu += "-------------------------------\n";
-    menu += "| Item        | State         |\n";
-    menu += "-------------------------------\n";
-    menu += "| LED         | " + String(ledState ? "ON " : "OFF") + "           |\n";
-    menu += "| Alarm       | " + String(alarmOn ? "ON " : "OFF") + "           |\n";
-    menu += "| Gas Alarm   | " + String(gasAlarmOn ? "ON " : "OFF") + "           |\n";
-    menu += "| LDR Alarm   | " + String(ldrAlarmOn ? "ON " : "OFF") + "           |\n";
-    menu += "| Relay       | " + String(relayState ? "ON " : "OFF") + "           |\n";
-    menu += "| Servo       | " + String(servoAngle) + " deg      |\n";
-    menu += "-------------------------------\n";
-    menu += "Commands:\n";
-    menu += "/toggle_led   /toggle_alarm\n";
-    menu += "/toggle_gas   /toggle_relay\n";
-    menu += "/toggle_ldr   /servo_0\n";
-    menu += "/servo_90     /servo_180\n";
-    menu += "\n";
-    menu += "DHT11 Sensor:\n";
-    menu += "Temperature: ";
-    menu += isnan(lastTemp) ? "--" : String(lastTemp, 1) + " C";
-    menu += "\nHumidity: ";
-    menu += isnan(lastHum) ? "--" : String(lastHum, 1) + " %";
-    menu += "\n";
-    menu += "LDR Value: ";
-    menu += String(ldrValue);
-    menu += "\n";
-    bot.sendMessage(chat_id, menu, "");
-}
-
-void processCommand(const String &cmd, const String &chat_id, const String &from) {
-    if (chat_id != CHAT_ID) {
-        bot.sendMessage(chat_id, "Unauthorized user", "");
-        return;
-    }
-
-    if (cmd == "/start" || cmd == "/help" || cmd == "/menu") {
-        sendMenu(chat_id, from);
-        return;
-    }
-
-    if (cmd == "/toggle_led") {
-        ledState = !ledState;
-        digitalWrite(ledPin, ledState);
-        bot.sendMessage(chat_id, ledState ? "LED turned ON" : "LED turned OFF", "");
-        return;
-    }
-
-    if (cmd == "/toggle_alarm") {
-        alarmOn = !alarmOn;
-        bot.sendMessage(chat_id, alarmOn ? "Alarm is now ON" : "Alarm is now OFF", "");
-        Serial.println(alarmOn ? "Alarm enabled" : "Alarm disabled");
-        return;
-    }
-
-    if (cmd == "/toggle_gas") {
-        gasAlarmOn = !gasAlarmOn;
-        bot.sendMessage(chat_id, gasAlarmOn ? "Gas alarm is now ON" : "Gas alarm is now OFF", "");
-        Serial.println(gasAlarmOn ? "Gas alarm enabled" : "Gas alarm disabled");
-        return;
-    }
-
-    if (cmd == "/toggle_ldr") {
-        ldrAlarmOn = !ldrAlarmOn;
-        bot.sendMessage(chat_id, ldrAlarmOn ? "LDR alarm is now ON" : "LDR alarm is now OFF", "");
-        Serial.println(ldrAlarmOn ? "LDR alarm enabled" : "LDR alarm disabled");
-        return;
-    }
-
-    if (cmd == "/toggle_relay") {
-        relayState = !relayState;
-        digitalWrite(relayPin, relayState);
-        bot.sendMessage(chat_id, relayState ? "Relay turned ON" : "Relay turned OFF", "");
-        Serial.println(relayState ? "Relay turned ON" : "Relay turned OFF");
-        return;
-    }
-
-    // Simplified servo control
-    if (cmd.startsWith("/servo ")) {
-        int degree = cmd.substring(7).toInt();
-        if (degree >= 0 && degree <= 180) {
-            if (!servoAttached) {
-                myServo.attach(servoPin);
-                servoAttached = true;
-            }
-            servoAngle = degree;
-            myServo.write(servoAngle);
-            bot.sendMessage(chat_id, "Servo moved to " + String(servoAngle) + " degrees", "");
-            Serial.println("Servo moved to " + String(servoAngle) + " degrees");
-        } else {
-            bot.sendMessage(chat_id, "Invalid servo angle. Use 0-180.", "");
-        }
-        return;
-    }
-}
-
-void handleNewMessages() {
-    int num = bot.getUpdates(bot.last_message_received + 1);
-    for (int i = 0; i < num; i++) {
-        String cid  = String(bot.messages[i].chat_id);
-        String txt  = bot.messages[i].text;
-        String from = bot.messages[i].from_name;
-        processCommand(txt, cid, from);
-    }
-}
-
-void checkPirSensor() {
-    bool currentPir = digitalRead(pirPin);
-    if (alarmOn && currentPir && !lastPirState) {
-        Serial.println("Motion detected! Thief alert!");
-        bot.sendMessage(CHAT_ID, "Alert! Motion detected. Possible thief!", "");
-    }
-    lastPirState = currentPir;
-}
-
-void checkGasSensor() {
-    int mq9Value = analogRead(mq9Pin);
-    if (gasAlarmOn && mq9Value > mq9Threshold) {
-        Serial.println("Gas detected! MQ-9 value: " + String(mq9Value));
-        bot.sendMessage(CHAT_ID, "Alert! Dangerous gas detected!", "");
-        delay(5000);
-    }
-}
-
-void checkLdrSensor() {
-    int ldrValue = analogRead(ldrPin);
-    if (ldrAlarmOn && ldrValue < ldrThreshold) {
-        Serial.println("LDR alert! Low light detected. LDR value: " + String(ldrValue));
-        bot.sendMessage(CHAT_ID, "Alert! Low light detected by LDR!", "");
-        delay(5000);
-    }
-    lastLdrValue = ldrValue;
+  // Sensör ısınması için bekleme (MQ sensörleri için gerekebilir)
+  Serial.println("Gaz sensörü ısınması için 10 saniye bekleniyor...");
+  delay(10000);
 }
 
 void loop() {
-    unsigned long now = millis();
-    if (now - lastTime >= pollDelay) {
-        handleNewMessages();
-        lastTime = now;
+  // PIR sensöründen veri oku ve hareket algılaması
+  int motionDetected = digitalRead(PIR_PIN);
+  if (motionDetected == HIGH && lastMotionState == LOW) {
+    if (alarmMode) {
+      Serial.println("ALARM! Hareket algılandı!");
+      bot.sendMessage(CHAT_ID, "ALARM! Hareket algılandı!", "");
+      digitalWrite(ledPin, ledState);
+    } else {
+      Serial.println("Hareket algılandı! LED yanıyor.");
+      digitalWrite(ledPin, HIGH);
     }
+    lastMotionState = HIGH;
+  }
+  else if (motionDetected == LOW && lastMotionState == HIGH) {
+    Serial.println("Hareket algılanmadı. LED kapalı.");
+    digitalWrite(ledPin, ledState);
+    lastMotionState = LOW;
+  }
 
-    checkPirSensor();
-    checkGasSensor();
-    checkLdrSensor();
+  // Gaz sensöründen veri oku
+  int gasValue = analogRead(GAS_SENSOR_PIN);
+  Serial.print("Gaz sensör değeri: ");
+  Serial.println(gasValue);
+
+  // Gaz eşik değeri kontrolü:
+  // Eğer gaz değeri eşik değerden yüksekse buzzer'ı çalıştır,
+  // aksi durumda buzzer kapalı kalır.
+  int gasThreshold = 500; // Eşik değeri (sensör tipine ve ortam koşullarına göre ayarlanır)
+  if (gasValue > gasThreshold) {
+    buzzerOn();
+    if (!gasAlertSent) {
+      bot.sendMessage(CHAT_ID, "Dikkat! Gaz seviyesi yüksek!", "");
+      gasAlertSent = true;
+    }
+  } else {
+    // Gaz değeri eşik altındaysa buzzer çalışmamalı
+    buzzerOff();
+    gasAlertSent = false;
+  }
+
+  // Telegram bot mesajlarını kontrol et
+  if (millis() > lastTimeBotRan + botRequestDelay) {
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    while (numNewMessages) {
+      Serial.println("got response");
+      handleNewMessages(numNewMessages);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
+    lastTimeBotRan = millis();
+  }
+
+  delay(200); // Döngü arası bekleme
+}
+
+void buzzerOn() {
+  digitalWrite(BUZZER_PIN, HIGH);
+}
+
+void buzzerOff() {
+  digitalWrite(BUZZER_PIN, LOW);
 }
